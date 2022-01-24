@@ -1,4 +1,4 @@
----
+COVID19---
 title: "COVID-19 report"
 author: "Daniel Levings"
 date:  "`r format(Sys.time(), '%m/%d/%Y')`"
