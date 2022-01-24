@@ -1,0 +1,2 @@
+# COVID19_local_maps_trends
+This is an RMarkdown script/document I created that will auto-download, do some calculations and generate plots showing the COVID19 trends for local states/counties over the past two weeks.  Specifically, it generates maps showing COVID death and case rates for MN and WI, and dot plots with trendlines showing how COVID case rates are changing.  This is all output to an HTML file for viewing.
