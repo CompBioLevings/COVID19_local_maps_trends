@@ -1,4 +1,4 @@
-COVID19---
+---
 title: "COVID-19 report"
 author: "Daniel Levings"
 date:  "`r format(Sys.time(), '%m/%d/%Y')`"
@@ -319,7 +319,7 @@ plot_usmap(data = USA.summ, values = "mean_deaths_by_pop", color = "black") +
     scale_fill_viridis(option="A", name = "Mean deaths per\nday per 100K", direction=-1, oob = scales::squish, 
       limits = c(USA.summ.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`1`) %>% unlist(),
       USA.summ.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`99`) %>% unlist())) + 
-    ggtitle(paste("2021 COVID-19 two-week average death rate - as of",
+    ggtitle(paste("2022 COVID-19 two-week average death rate - as of",
                   Sys.Date())) +
     theme(legend.position = "right", 
           plot.title = element_text(face = "bold", size = 14))
@@ -327,14 +327,14 @@ plot_usmap(data = USA.summ, values = "mean_cases_by_pop", color = "black") +
     scale_fill_viridis(option="A", name = "Mean cases per\nday per 100K", direction=-1, oob = scales::squish, 
                        limits = c(USA.summ.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`1`) %>% unlist(),
                                   USA.summ.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`99`) %>% unlist())) + 
-    ggtitle(paste("2021 COVID-19 two-week average case rate - as of",
+    ggtitle(paste("2022 COVID-19 two-week average case rate - as of",
                   Sys.Date())) +
     theme(legend.position = "right", 
           plot.title = element_text(face = "bold", size = 14))
 plot_usmap(data = USA.summ, values = "Vacc_FirstDose_Pct", color = "black") + 
     scale_fill_viridis(option="D", name = "First Dose Pct%", trans = "log2", direction=-1,
                        breaks = c(2,5,17,64), labels = c(1,4,16,64)) + 
-    ggtitle(paste("2021 COVID-19 vaccination percent - as of",
+    ggtitle(paste("2022 COVID-19 vaccination percent - as of",
                   Sys.Date())) +
     theme(legend.position = "right", 
           plot.title = element_text(face = "bold", size = 14))
@@ -351,7 +351,7 @@ plot_usmap(data = MN_WI_data, values = "mean_deaths_by_pop", color = "black",
   scale_fill_viridis(option="A", name = "Mean deaths per\nday per 100K", direction=-1, oob = scales::squish, 
      limits = c(MN_WI_data.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`1`) %>% unlist(),
       MN_WI_data.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`95`) %>% unlist())) + 
-  ggtitle(paste("2021 COVID-19 two-week average death rate - as of",
+  ggtitle(paste("2022 COVID-19 two-week average death rate - as of",
                 Sys.Date())) +
   theme(legend.position = "right", 
       plot.title = element_text(face = "bold", size = 14))
@@ -360,14 +360,14 @@ plot_usmap(data = MN_WI_data, values = "mean_cases_by_pop", color = "black",
   scale_fill_viridis(option="A", name = "Mean cases per\nday per 100K", direction=-1, oob = scales::squish, 
    limits = c(MN_WI_data.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`1`) %>% unlist(),
     MN_WI_data.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`95`) %>% unlist())) + 
-  ggtitle(paste("2021 COVID-19 two-week average case rate - as of",
+  ggtitle(paste("2022 COVID-19 two-week average case rate - as of",
                 Sys.Date())) +
   theme(legend.position = "right", 
     plot.title = element_text(face = "bold", size = 14))
 plot_usmap(data = MN_WI_data, values = "Vacc_FirstDose_Pct", color = "black", 
     include = MN_WI_data %>% dplyr::select(fips) %>% unlist %>% unique()) + 
   scale_fill_viridis(option="D", name = "First Dose Pct%", direction=-1) + 
-  ggtitle(paste("2021 COVID-19 vaccination percent - as of",
+  ggtitle(paste("2022 COVID-19 vaccination percent - as of",
                 Sys.Date())) +
   theme(legend.position = "right", 
     plot.title = element_text(face = "bold", size = 14))
