@@ -7,6 +7,19 @@ I've included an example HTML file for trends up to January 23rd, 2022.
 
 ---------------------------------------------------------------------------------------------------
 
+**Data downloaded for use with this application come from multiple sources:**
+
+Data from The New York Times, based on reports from state and local health agencies:
+https://github.com/nytimes/covid-19-data/
+
+Data from COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University:
+https://github.com/CSSEGISandData/COVID-19
+
+Data from the CDC on vaccination rates is available at:
+https://data.cdc.gov/api/views/8xkx-amqh/rows.tsv?accessType=DOWNLOAD&bom=true
+
+---------------------------------------------------------------------------------------------------
+
 Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
 This work is licensed under a
