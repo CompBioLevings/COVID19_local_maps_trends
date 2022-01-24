@@ -3,7 +3,7 @@ This is an RMarkdown script/document I created that will auto-download data from
 
 I've included an example HTML file for trends up to January 23rd, 2022.
 
-*Note:* Repository/app is designed to run from the desktop, so either clone the repository to desktop *OR* update the file paths within the code to wherever you placed the repository.
+*Note:* Repository/app is designed to run from the desktop (and for use on Linux, with the '/home/user/Desktop/' file structure), so either clone the repository to desktop *OR* update the file paths within the code to wherever you placed the repository.
 
 ---------------------------------------------------------------------------------------------------
 
