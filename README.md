@@ -15,7 +15,7 @@ https://github.com/nytimes/covid-19-data/
 Data from COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University:
 https://github.com/CSSEGISandData/COVID-19
 
-Data from the CDC on vaccination rates is available at:
+Data from the CDC on vaccination rates:
 https://data.cdc.gov/api/views/8xkx-amqh/rows.tsv?accessType=DOWNLOAD&bom=true
 
 ---------------------------------------------------------------------------------------------------
