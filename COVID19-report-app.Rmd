@@ -1,0 +1,451 @@
+---
+title: "COVID-19 report"
+author: "Daniel Levings"
+date:  "`r format(Sys.time(), '%m/%d/%Y')`"
+header-includes:
+- \usepackage{pdflscape}
+- \usepackage{pdfpages}
+- \usepackage{float}
+- \usepackage{xcolor}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage[labelformat = empty]{caption}
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding, output_file = paste0(substr(inputFile,1,nchar(inputFile)-14),Sys.Date(),'.html')) })
+output:
+    html_document: default
+---
+
+```{r setup, include=FALSE}
+# knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(fig.align = "center", fig.pos="H")
+knitr::knit_hooks$set(document = function(x) {sub('\\usepackage[]{color}', '\\usepackage{xcolor}', x, fixed = TRUE)})
+knitr::opts_chunk$set(engine.path = list(python = '/home/daniel/anaconda3/envs/deeptools/bin/python'))
+```  
+
+## Purpose of this document/code:  
+
+This is an **R Markdown** script created to document long-term trends in COVID-19 case and death rates across the United States and locally (in the Midwest/counties around Douglas Co, WI, where my family lives).  
+
+```{r import packages, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library('doParallel')
+library('BiocParallel')
+library('splines')
+library('magrittr')
+library('tidyverse')
+library('lubridate')
+library('ggplot2')
+library('plotly')
+library('viridis')
+library('readr')
+library('tigris')
+library('usmap')
+library('rnaturalearth')
+library('sf')
+library('rgeos')
+library('tidycensus')
+library('extrafont')
+loadfonts(device = 'postscript', quiet=TRUE)
+options(tigris_use_cache = TRUE, Ncpus=floor(detectCores()*.9))
+register(BPPARAM = MulticoreParam(floor(detectCores()*.9), progressbar = TRUE, exportglobals = FALSE))
+options(MulticoreParam=MulticoreParam(workers = floor(detectCores()*0.9), 
+    progressbar = TRUE, exportglobals = FALSE))
+cores <- detectCores()
+
+# If the script crashes, it's likely because the downloads take too long and timeout.  Try increasing
+# size/number of seconds of the following variable
+timeout_sec <- 800
+```  
+
+&nbsp;  
+
+```{r get COVID and census data, results='hide'}
+# Set API key for census data
+# census_api_key("##############", install = T)
+
+# Get variables that can be downloaded from the ACS dataset
+ACS_vars <- load_variables(year = 2019, dataset = "acs1", cache = TRUE)
+ACS_vars %>% filter(concept == "TOTAL POPULATION")
+
+# Get population by county
+Pop_size_by_cty <- get_estimates(geography = "county", product = "population", year = 2019) %>% 
+    filter(variable %in% c("POP", "DENSITY")) %>% pivot_wider(id_cols = c("NAME", "GEOID"), 
+    names_from = "variable", values_from = "value")
+
+# Get data for United States counties
+timeout_sec <- getOption('timeout')
+if (file.exists("~/Desktop/COVID/COVID-19_NYT_data.csv")){
+    NYT_data_date <- as.Date(file.info("~/Desktop/COVID/COVID-19_NYT_data.csv")$mtime)
+} else {
+    NYT_data_date <- as.Date(Sys.Date()-14)
+}
+if (as.numeric(Sys.Date() - NYT_data_date) > 1) {
+    options(timeout = timeout_sec)
+    download.file(url = "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv",
+                  destfile = "~/Desktop/COVID/COVID-19_NYT_data.csv", method = "wget", quiet = T)
+    options(timeout = timeout_sec)
+} else {}
+NYT.COVID19.data <- read_csv(file = "~/Desktop/COVID/COVID-19_NYT_data.csv", col_names = TRUE, col_types = cols(.default = col_character()))
+
+# Get data from COVID19 John's Hopkins GitHub URL
+if (file.exists("~/Desktop/COVID/COVID-19_JH_data.csv")){
+    JH_data_date <- as.Date(file.info("~/Desktop/COVID/COVID-19_JH_data.csv")$mtime)
+} else {
+    JH_data_date <- as.Date(Sys.Date()-14)
+}
+if (as.numeric(Sys.Date() - JH_data_date) > 1) {
+    options(timeout = timeout_sec)
+    download.file(url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv",
+                  destfile = "~/Desktop/COVID/COVID-19_JH_data.csv", method = "wget", quiet = T)
+    options(timeout = timeout_sec)
+} else {}
+JH.COVID19.data <- read_csv(file = "~/Desktop/COVID/COVID-19_JH_data.csv", col_names = TRUE, col_types = cols(.default = col_character()))
+
+# Convert numeric columns to numeric
+NYT.COVID19.data[,5:ncol(NYT.COVID19.data)] <- sapply(NYT.COVID19.data[,5:ncol(NYT.COVID19.data)], as.numeric)
+JH.COVID19.data[,3:ncol(JH.COVID19.data)] <- sapply(JH.COVID19.data[,3:ncol(JH.COVID19.data)], as.numeric)
+
+# Extract data for countries/states of interest
+USA.data <- NYT.COVID19.data %>% as.data.frame()
+US.states <- USA.data[,"fips"] %>% unlist %>% as.character %>% unique %>% na.omit()
+USA.data <- left_join(x=data.frame(fips = as.character(US.states)), y=USA.data[,c(1,4:ncol(USA.data))] %>%
+    mutate(fips = as.character(fips)))
+
+# All country data (in the process, clean up some countries' names)
+Countries.data <- JH.COVID19.data %>% as.data.frame()
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Congo (Brazzaville)", "Congo (Kinshasa)", "Republic of the Congo")] <- "Democratic Republic of the Congo"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("The Bahamas", "Bahamas, The")] <- "Bahamas"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Brunei")] <- "Brunei Darussalam"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Cote d'Ivoire")] <- "Côte d'Ivoire"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Czechia")] <- "Czech Republic"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Taiwan*")] <- "Taiwan"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Russia")] <- "Russian Federation"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Korea, South")] <- "Republic of Korea"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Eswatini")] <- "Swaziland"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Holy See")] <- "Vatican"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("North Macedonia")] <- "Macedonia"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("Reunion")] <- "French Polynesia"
+Countries.data$`Country/Region`[Countries.data$`Country/Region` %in% c("US")] <- "United States"
+Countries.data <- Countries.data[,c(2,5:ncol(JH.COVID19.data))] %>% 
+    group_by(`Country/Region`) %>% summarize(across(.fns = sum)) %>% as.data.frame()
+Countries.names <- Countries.data[,1] %>% unlist %>% as.character()
+Countries.data %<>% set_rownames(Countries.names)
+Countries.data$`Country/Region` <- NULL
+
+# Calculate local (last two weeks) average daily case and death rate
+USA.summ <- USA.data %>% mutate(date = as.Date(date)) %>% arrange(fips, date) %>%
+    # mutate(daily_cases = cases-lag(cases), daily_deaths = deaths-lag(deaths)) %>% 
+    filter(date >= as.Date(Sys.Date()-14)) %>% 
+    group_by(fips) %>% summarize(
+    mean_cases_per_day = mean(cases-lag(cases), na.rm=T),
+    mean_deaths_per_day = mean(deaths-lag(deaths), na.rm=T)
+)
+
+# Now get vaccination data - takes a few min
+if (file.exists("~/Desktop/COVID/COVID-19_Vaccinations_in_the_United_States_County.tsv")){
+    COVID_data_date <- as.Date(file.info("~/Desktop/COVID/COVID-19_Vaccinations_in_the_United_States_County.tsv")$mtime)
+} else {
+    COVID_data_date <- as.Date(Sys.Date()-14)
+}
+if (as.numeric(Sys.Date() - COVID_data_date) > 1) {
+    options(timeout = timeout_sec)
+    download.file(url = "https://data.cdc.gov/api/views/8xkx-amqh/rows.tsv?accessType=DOWNLOAD&bom=true",
+                  destfile = "~/Desktop/COVID/COVID-19_Vaccinations_in_the_United_States_County.tsv", method = "wget", quiet = T)
+    options(timeout = timeout_sec)
+} else {}
+CDC_vacc_data <- read.table(header = T, sep = "\t", quote = "", dec = ".", fill = T,
+    file = "~/Desktop/COVID/COVID-19_Vaccinations_in_the_United_States_County.tsv")
+
+# Now combine case and death rates, population numbers, and CDC vaccination rate data by county
+USA.summ <- left_join(x=USA.summ, y=Pop_size_by_cty, by = c("fips" = "GEOID")) %>% 
+    left_join(y=CDC_vacc_data %>% mutate(Date = as.Date(Date, format = "%m/%d/%Y")) %>% 
+    arrange(FIPS, Date) %>% group_by(FIPS) %>% summarize(
+    Vacc_Complete_Pct = as.numeric(max(Series_Complete_Pop_Pct, na.rm=T))+1,
+    Vacc_FirstDose_Pct = as.numeric(max(Administered_Dose1_Pop_Pct, na.rm=T))+1),
+              by = c("fips" = "FIPS"))
+
+# add new function for scaling
+stdize = function(x, ...) {(x - min(x, ...)) / (max(x, ...) - min(x, ...))}
+
+# Add a factor comparing case/death and vaccination rates
+USA.summ %<>% mutate(mean_cases_by_pop = mean_cases_per_day/(POP/100000),
+    mean_deaths_by_pop = mean_deaths_per_day/(POP/100000),
+    cases_vs_vacc = stdize(mean_cases_by_pop/(Vacc_FirstDose_Pct/101), na.rm=T),
+    deaths_vs_vacc = stdize(mean_deaths_by_pop/(Vacc_FirstDose_Pct/101), na.rm=T),
+    cases_vs_fullvacc = stdize(mean_cases_by_pop/(Vacc_Complete_Pct/101), na.rm=T),
+    deaths_vs_fullvacc = stdize(mean_deaths_by_pop/(Vacc_Complete_Pct/101), na.rm=T))
+
+USA.summ.quants <- rbind.data.frame(USA.summ %>% summarize(name = "cases_by_pop",
+    `0` = min(mean_cases_by_pop, na.rm=T),
+    `0.1` = quantile(mean_cases_by_pop, probs = 0.001, na.rm=T),
+    `1` = quantile(mean_cases_by_pop, probs = 0.01, na.rm=T),
+    `90` = quantile(mean_cases_by_pop, probs = 0.9, na.rm=T),
+    `99` = quantile(mean_cases_by_pop, probs = 0.99, na.rm=T),
+    `100` = max(mean_cases_by_pop, na.rm=T)),
+    USA.summ %>% summarize(name = "deaths_by_pop",
+    `0` = min(mean_deaths_by_pop, na.rm=T),
+    `0.1` = quantile(mean_deaths_by_pop, probs = 0.001, na.rm=T),
+    `1` = quantile(mean_deaths_by_pop, probs = 0.01, na.rm=T),
+    `90` = quantile(mean_deaths_by_pop, probs = 0.9, na.rm=T),
+    `99` = quantile(mean_deaths_by_pop, probs = 0.99, na.rm=T),
+    `100` = max(mean_deaths_by_pop, na.rm=T)),
+    USA.summ %>% summarize(name = "Vacc_FirstDose_Pct",
+    `0` = min(Vacc_FirstDose_Pct, na.rm=T),
+    `0.1` = quantile(Vacc_FirstDose_Pct, probs = 0.001, na.rm=T),
+    `1` = quantile(Vacc_FirstDose_Pct, probs = 0.01, na.rm=T),
+    `90` = quantile(Vacc_FirstDose_Pct, probs = 0.9, na.rm=T),
+    `99` = quantile(Vacc_FirstDose_Pct, probs = 0.99, na.rm=T),
+    `100` = max(Vacc_FirstDose_Pct, na.rm=T)),
+    USA.summ %>% summarize(name = "Vacc_Complete_Pct",
+   `0` = min(Vacc_Complete_Pct, na.rm=T),
+   `0.1` = quantile(Vacc_Complete_Pct, probs = 0.001, na.rm=T),
+   `1` = quantile(Vacc_Complete_Pct, probs = 0.01, na.rm=T),
+   `90` = quantile(Vacc_Complete_Pct, probs = 0.9, na.rm=T),
+   `99` = quantile(Vacc_Complete_Pct, probs = 0.99, na.rm=T),
+   `100` = max(Vacc_Complete_Pct, na.rm=T)),
+    USA.summ %>% summarize(name = "cases_vs_vacc",
+   `0` = min(cases_vs_vacc, na.rm=T),
+   `0.1` = quantile(cases_vs_vacc, probs = 0.001, na.rm=T),
+   `1` = quantile(cases_vs_vacc, probs = 0.01, na.rm=T),
+   `90` = quantile(cases_vs_vacc, probs = 0.9, na.rm=T),
+   `99` = quantile(cases_vs_vacc, probs = 0.99, na.rm=T),
+   `100` = max(cases_vs_vacc, na.rm=T)),
+    USA.summ %>% summarize(name = "deaths_vs_vacc",
+    `0` = min(deaths_vs_vacc, na.rm=T),
+    `0.1` = quantile(deaths_vs_vacc, probs = 0.001, na.rm=T),
+    `1` = quantile(deaths_vs_vacc, probs = 0.01, na.rm=T),
+    `90` = quantile(deaths_vs_vacc, probs = 0.9, na.rm=T),
+    `99` = quantile(deaths_vs_vacc, probs = 0.99, na.rm=T),
+    `100` = max(deaths_vs_vacc, na.rm=T)),
+    USA.summ %>% summarize(name = "cases_vs_fullvacc",
+    `0` = min(cases_vs_fullvacc, na.rm=T),
+    `0.1` = quantile(cases_vs_fullvacc, probs = 0.001, na.rm=T),
+    `1` = quantile(cases_vs_fullvacc, probs = 0.01, na.rm=T),
+    `90` = quantile(cases_vs_fullvacc, probs = 0.90, na.rm=T),
+    `99` = quantile(cases_vs_fullvacc, probs = 0.99, na.rm=T),
+    `100` = max(cases_vs_fullvacc, na.rm=T)),
+    USA.summ %>% summarize(name = "deaths_vs_fullvacc",
+    `0` = min(deaths_vs_fullvacc, na.rm=T),
+    `0.1` = quantile(deaths_vs_fullvacc, probs = 0.001, na.rm=T),
+    `1` = quantile(deaths_vs_fullvacc, probs = 0.001, na.rm=T),
+    `90` = quantile(deaths_vs_fullvacc, probs = 0.9, na.rm=T),
+    `99` = quantile(deaths_vs_fullvacc, probs = 0.99, na.rm=T),
+    `100` = max(deaths_vs_fullvacc, na.rm=T)))
+
+# Now isolate/extract only data for WI and MN
+# First reorganize
+USA.summ <- USA.summ %>% mutate(State = trimws(gsub(x=NAME, pattern = "^.*, ?", replacement = "", perl = T))) %>%
+    dplyr::select(1, NAME, State, POP, DENSITY, 2:3, 7:length(colnames(USA.summ)))
+
+# Then get appropriate data
+MN_WI_data <- USA.summ %>% filter(State %in% c("Wisconsin", "Minnesota"))
+
+# Get mins and maxes
+MN_WI_data.quants <- rbind.data.frame(USA.summ %>% summarize(name = "cases_by_pop",
+      `0` = min(mean_cases_by_pop, na.rm=T),
+      `0.1` = quantile(mean_cases_by_pop, probs = 0.001, na.rm=T),
+      `1` = quantile(mean_cases_by_pop, probs = 0.01, na.rm=T),
+      `90` = quantile(mean_cases_by_pop, probs = 0.9, na.rm=T),
+      `95` = quantile(mean_cases_by_pop, probs = 0.95, na.rm=T),
+      `99` = quantile(mean_cases_by_pop, probs = 0.99, na.rm=T),
+      `100` = max(mean_cases_by_pop, na.rm=T)),
+    MN_WI_data %>% summarize(name = "deaths_by_pop",
+      `0` = min(mean_deaths_by_pop, na.rm=T),
+      `0.1` = quantile(mean_deaths_by_pop, probs = 0.001, na.rm=T),
+      `1` = quantile(mean_deaths_by_pop, probs = 0.01, na.rm=T),
+      `90` = quantile(mean_deaths_by_pop, probs = 0.9, na.rm=T),
+      `95` = quantile(mean_deaths_by_pop, probs = 0.95, na.rm=T),
+      `99` = quantile(mean_deaths_by_pop, probs = 0.99, na.rm=T),
+      `100` = max(mean_deaths_by_pop, na.rm=T)),
+    MN_WI_data %>% summarize(name = "Vacc_FirstDose_Pct",
+      `0` = min(Vacc_FirstDose_Pct, na.rm=T),
+      `0.1` = quantile(Vacc_FirstDose_Pct, probs = 0.001, na.rm=T),
+      `1` = quantile(Vacc_FirstDose_Pct, probs = 0.01, na.rm=T),
+      `90` = quantile(Vacc_FirstDose_Pct, probs = 0.9, na.rm=T),
+      `95` = quantile(Vacc_FirstDose_Pct, probs = 0.95, na.rm=T),
+      `99` = quantile(Vacc_FirstDose_Pct, probs = 0.99, na.rm=T),
+      `100` = max(Vacc_FirstDose_Pct, na.rm=T)),
+    MN_WI_data %>% summarize(name = "Vacc_Complete_Pct",
+      `0` = min(Vacc_Complete_Pct, na.rm=T),
+      `0.1` = quantile(Vacc_Complete_Pct, probs = 0.001, na.rm=T),
+      `1` = quantile(Vacc_Complete_Pct, probs = 0.01, na.rm=T),
+      `90` = quantile(Vacc_Complete_Pct, probs = 0.9, na.rm=T),
+      `95` = quantile(Vacc_Complete_Pct, probs = 0.95, na.rm=T),
+      `99` = quantile(Vacc_Complete_Pct, probs = 0.99, na.rm=T),
+      `100` = max(Vacc_Complete_Pct, na.rm=T)),
+    MN_WI_data %>% summarize(name = "cases_vs_vacc",
+      `0` = min(cases_vs_vacc, na.rm=T),
+      `0.1` = quantile(cases_vs_vacc, probs = 0.001, na.rm=T),
+      `1` = quantile(cases_vs_vacc, probs = 0.01, na.rm=T),
+      `90` = quantile(cases_vs_vacc, probs = 0.9, na.rm=T),
+      `95` = quantile(cases_vs_vacc, probs = 0.95, na.rm=T),
+      `99` = quantile(cases_vs_vacc, probs = 0.99, na.rm=T),
+      `100` = max(cases_vs_vacc, na.rm=T)),
+    MN_WI_data %>% summarize(name = "deaths_vs_vacc",
+      `0` = min(deaths_vs_vacc, na.rm=T),
+      `0.1` = quantile(deaths_vs_vacc, probs = 0.001, na.rm=T),
+      `1` = quantile(deaths_vs_vacc, probs = 0.01, na.rm=T),
+      `90` = quantile(deaths_vs_vacc, probs = 0.9, na.rm=T),
+      `95` = quantile(deaths_vs_vacc, probs = 0.95, na.rm=T),
+      `99` = quantile(deaths_vs_vacc, probs = 0.99, na.rm=T),
+      `100` = max(deaths_vs_vacc, na.rm=T)),
+    MN_WI_data %>% summarize(name = "cases_vs_fullvacc",
+      `0` = min(cases_vs_fullvacc, na.rm=T),
+      `0.1` = quantile(cases_vs_fullvacc, probs = 0.001, na.rm=T),
+      `1` = quantile(cases_vs_fullvacc, probs = 0.01, na.rm=T),
+      `90` = quantile(cases_vs_fullvacc, probs = 0.90, na.rm=T),
+      `95` = quantile(cases_vs_fullvacc, probs = 0.95, na.rm=T),
+      `99` = quantile(cases_vs_fullvacc, probs = 0.99, na.rm=T),
+      `100` = max(cases_vs_fullvacc, na.rm=T)),
+    MN_WI_data %>% summarize(name = "deaths_vs_fullvacc",
+      `0` = min(deaths_vs_fullvacc, na.rm=T),
+      `0.1` = quantile(deaths_vs_fullvacc, probs = 0.001, na.rm=T),
+      `1` = quantile(deaths_vs_fullvacc, probs = 0.001, na.rm=T),
+      `90` = quantile(deaths_vs_fullvacc, probs = 0.9, na.rm=T),
+      `95` = quantile(deaths_vs_fullvacc, probs = 0.95, na.rm=T),
+      `99` = quantile(deaths_vs_fullvacc, probs = 0.99, na.rm=T),
+      `100` = max(deaths_vs_fullvacc, na.rm=T))) 
+```  
+
+&nbsp;  
+&nbsp;  
+
+Plot of country-wide data/trends for USA:  
+
+```{r plot USA, fig.width=13, fig.height=8}
+plot_usmap(data = USA.summ, values = "mean_deaths_by_pop", color = "black") + 
+    scale_fill_viridis(option="A", name = "Mean deaths per\nday per 100K", direction=-1, oob = scales::squish, 
+      limits = c(USA.summ.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`1`) %>% unlist(),
+      USA.summ.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`99`) %>% unlist())) + 
+    ggtitle(paste("2021 COVID-19 two-week average death rate - as of",
+                  Sys.Date())) +
+    theme(legend.position = "right", 
+          plot.title = element_text(face = "bold", size = 14))
+plot_usmap(data = USA.summ, values = "mean_cases_by_pop", color = "black") + 
+    scale_fill_viridis(option="A", name = "Mean cases per\nday per 100K", direction=-1, oob = scales::squish, 
+                       limits = c(USA.summ.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`1`) %>% unlist(),
+                                  USA.summ.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`99`) %>% unlist())) + 
+    ggtitle(paste("2021 COVID-19 two-week average case rate - as of",
+                  Sys.Date())) +
+    theme(legend.position = "right", 
+          plot.title = element_text(face = "bold", size = 14))
+plot_usmap(data = USA.summ, values = "Vacc_FirstDose_Pct", color = "black") + 
+    scale_fill_viridis(option="D", name = "First Dose Pct%", trans = "log2", direction=-1,
+                       breaks = c(2,5,17,64), labels = c(1,4,16,64)) + 
+    ggtitle(paste("2021 COVID-19 vaccination percent - as of",
+                  Sys.Date())) +
+    theme(legend.position = "right", 
+          plot.title = element_text(face = "bold", size = 14))
+```  
+
+&nbsp;  
+&nbsp;  
+
+Now plot of statewide (MN and WI) data/trends:  
+
+```{r plot statewide, fig.width=13, fig.height=8}
+plot_usmap(data = MN_WI_data, values = "mean_deaths_by_pop", color = "black", 
+     include = MN_WI_data %>% dplyr::select(fips) %>% unlist %>% unique()) + 
+  scale_fill_viridis(option="A", name = "Mean deaths per\nday per 100K", direction=-1, oob = scales::squish, 
+     limits = c(MN_WI_data.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`1`) %>% unlist(),
+      MN_WI_data.quants %>% filter(name == "deaths_by_pop") %>% dplyr::select(`95`) %>% unlist())) + 
+  ggtitle(paste("2021 COVID-19 two-week average death rate - as of",
+                Sys.Date())) +
+  theme(legend.position = "right", 
+      plot.title = element_text(face = "bold", size = 14))
+plot_usmap(data = MN_WI_data, values = "mean_cases_by_pop", color = "black", 
+       include = MN_WI_data %>% dplyr::select(fips) %>% unlist %>% unique()) + 
+  scale_fill_viridis(option="A", name = "Mean cases per\nday per 100K", direction=-1, oob = scales::squish, 
+   limits = c(MN_WI_data.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`1`) %>% unlist(),
+    MN_WI_data.quants %>% filter(name == "cases_by_pop") %>% dplyr::select(`95`) %>% unlist())) + 
+  ggtitle(paste("2021 COVID-19 two-week average case rate - as of",
+                Sys.Date())) +
+  theme(legend.position = "right", 
+    plot.title = element_text(face = "bold", size = 14))
+plot_usmap(data = MN_WI_data, values = "Vacc_FirstDose_Pct", color = "black", 
+    include = MN_WI_data %>% dplyr::select(fips) %>% unlist %>% unique()) + 
+  scale_fill_viridis(option="D", name = "First Dose Pct%", direction=-1) + 
+  ggtitle(paste("2021 COVID-19 vaccination percent - as of",
+                Sys.Date())) +
+  theme(legend.position = "right", 
+    plot.title = element_text(face = "bold", size = 14))
+```  
+
+&nbsp;  
+&nbsp;  
+
+Plot of local trends in case rate:  
+
+```{r plot local trends}
+# Now get the data for the case rate in all counties nearby Douglas
+# Change to your state/nearby states and counties here:
+Local_COVID_data <- NYT.COVID19.data %>% 
+    filter(((county %in% c("Pine", "Carlton", "St. Louis")) & (state %in% "Minnesota")) | 
+    ((county %in% c("Douglas", "Bayfield", "Sawyer", "Washburn", "Ashland", "Burnett")) & 
+    (state %in% "Wisconsin"))) %>% mutate(date = as.Date(date)) %>% arrange(fips, date) %>%
+    mutate(cases_per_day = cases-lag(cases)) %>% filter(date >= as.Date(Sys.Date()-(16*7))) 
+Local_COVID_data <- Local_COVID_data %>% left_join(y=Pop_size_by_cty, by = c("fips" = "GEOID")) %>%
+    mutate(new_cases_per_100k = cases_per_day/(POP/100000))
+
+# Remove weekends (always 0's)
+Local_COVID_data <- Local_COVID_data %>% mutate(weekday = wday(date)) %>% filter((weekday > 1) & (weekday < 7))
+
+# Get plot boundaries
+plot_max <- ceiling(as.numeric(quantile(Local_COVID_data$cases_per_day, probs = c(0.995)))/10)*10
+plot_max2 <- ceiling(as.numeric(quantile(Local_COVID_data$new_cases_per_100k, probs = c(0.99)))/10)*10 
+
+# Now plot the trends of new cases for the last ~3 months
+p1 <- Local_COVID_data %>% 
+    ggplot(mapping = aes(x = date, y = cases_per_day, group = county, fill = county, color = county)) +
+    geom_point(alpha = 0.35) + stat_smooth(geom="smooth", method = "lm", formula = y ~ bs(x=x, df=3), se = F, linetype = 2) + 
+    scale_fill_manual(values = rainbow(9)[c(rbind(seq(1,7,2), c(seq(6,9,2),seq(2,5,2))), 9)]) +
+    scale_color_manual(values = rainbow(9)[c(rbind(seq(1,7,2), c(seq(6,9,2),seq(2,5,2))), 9)]) +
+    ggtitle(paste0("Nearby COVID-19 cases as of ", as.character(Sys.Date()))) + 
+    coord_cartesian(xlim = c(as.Date(Sys.Date()-(12*7)), as.Date(Sys.Date())), ylim = c(0, plot_max), expand = F) +
+    # scale_y_log10() + 
+    theme_bw() +
+    theme(plot.title = element_text(face="bold", hjust=0.5, size=16), 
+          axis.text = element_text(color="black", size=12),
+          axis.title = element_text(face="bold", color="black", size=14), 
+          axis.ticks = element_line(color="black"),
+          panel.border = element_rect(size=0.5, color="black"),
+          legend.text = element_text(color="black", size=12), 
+          legend.title = element_text(color = "black", face = "bold.italic", size = 13),
+          plot.margin = unit(c(5.5,9,5.5,5.5), "points"),
+          panel.grid = element_line(color = "gray95", linetype = 2)
+    )
+p2 <- Local_COVID_data %>% 
+    ggplot(mapping = aes(x = date, y = new_cases_per_100k, group = county, fill = county, color = county)) +
+    geom_point(alpha = 0.35) + stat_smooth(geom="smooth", method = "lm", formula = y ~ bs(x=x, df=3), se = F, linetype = 2) + 
+    scale_fill_manual(values = rainbow(9)[c(rbind(seq(1,7,2), c(seq(6,9,2),seq(2,5,2))), 9)]) +
+    scale_color_manual(values = rainbow(9)[c(rbind(seq(1,7,2), c(seq(6,9,2),seq(2,5,2))), 9)]) +
+    ggtitle(paste0("Nearby COVID-19 cases as of ", as.character(Sys.Date()))) + 
+    coord_cartesian(xlim = c(as.Date(Sys.Date()-(12*7)), as.Date(Sys.Date())), ylim = c(0, plot_max2), expand = F) +
+    # scale_y_log10() + 
+    theme_bw() +
+    theme(plot.title = element_text(face="bold", hjust=0.5, size=16), 
+        axis.text = element_text(color="black", size=12),
+        axis.title = element_text(face="bold", color="black", size=14), 
+        axis.ticks = element_line(color="black"),
+        panel.border = element_rect(size=0.5, color="black"),
+        legend.text = element_text(color="black", size=12), 
+        legend.title = element_text(color = "black", face = "bold.italic", size = 13),
+        plot.margin = unit(c(5.5,9,5.5,5.5), "points"),
+        panel.grid = element_line(color = "gray95", linetype = 2)
+    )
+```  
+
+```{r plotly, fig.width=13, fig.height=8}
+m <- list(l = 50, r = 50, b = 100, t = 100, pad = 4)
+p1 <- ggplotly(p1, width = 1000, height = 700) %>% layout(autosize = F, margin = m)
+p2 <- ggplotly(p2, width = 1000, height = 700) %>% layout(autosize = F, margin = m)
+p1
+```  
+
+&nbsp;  
+
+```{r plotly 2, fig.width=13, fig.height=8}
+p2
+```  
